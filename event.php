@@ -56,16 +56,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
         die('Invalid request.');
     }
 
+    // TRANSACTION + ROW LOCK: this closes the race condition where two
+    // requests could both read "1 slot left" and both insert, causing
+    // over-booking. MySQL: FOR UPDATE locks the event row until we
+    // commit. SQLite has no row locking - BEGIN IMMEDIATE takes a write
+    // lock on the whole database for the same effect. PDO's own
+    // beginTransaction()/commit()/rollBack() don't track a raw "BEGIN
+    // IMMEDIATE" issued via exec(), so we use exec() consistently for
+    // both drivers to keep PDO's transaction state in sync.
+    $isSqlite = DB_DRIVER === 'sqlite';
+    $lockClause = $isSqlite ? '' : 'FOR UPDATE';
+
     try {
-        // TRANSACTION + ROW LOCK: this closes the race condition where two
-        // requests could both read "1 slot left" and both insert, causing
-        // over-booking. FOR UPDATE locks the event row until we commit.
-        $pdo->beginTransaction();
+        $pdo->exec($isSqlite ? 'BEGIN IMMEDIATE' : 'BEGIN');
 
         $stmt = $pdo->prepare(
             "SELECT e.total_slots,
                     (SELECT COUNT(*) FROM registrations r WHERE r.event_id = e.id) AS taken
-             FROM events e WHERE e.id = ? FOR UPDATE"
+             FROM events e WHERE e.id = ? $lockClause"
         );
         $stmt->execute([$eventId]);
         $locked = $stmt->fetch();
@@ -76,7 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
 
         if ($locked['taken'] >= $locked['total_slots']) {
             $registerError = 'Sorry, this event is now full. Join the waitlist below to be notified if a spot opens up.';
-            $pdo->rollBack();
+            $pdo->exec('ROLLBACK');
         } else {
             $dupStmt = $pdo->prepare(
                 'SELECT id FROM registrations WHERE user_id = ? AND event_id = ?'
@@ -85,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
 
             if ($dupStmt->fetch()) {
                 $registerError = 'You are already registered for this event.';
-                $pdo->rollBack();
+                $pdo->exec('ROLLBACK');
             } else {
                 $checkinCode = strtoupper(bin2hex(random_bytes(4)));
                 $insert = $pdo->prepare(
@@ -94,14 +102,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
                 $insert->execute([current_user_id(), $eventId, $checkinCode]);
                 $pdo->prepare('DELETE FROM waitlist WHERE user_id = ? AND event_id = ?')
                     ->execute([current_user_id(), $eventId]);
-                $pdo->commit();
+                $pdo->exec('COMMIT');
 
                 set_flash('success', 'You are registered for "' . $event['title'] . '"! Your check-in code is ' . $checkinCode . '.');
                 redirect('/event.php?id=' . $eventId);
             }
         }
     } catch (PDOException $e) {
-        $pdo->rollBack();
+        if ($pdo->inTransaction()) {
+            $pdo->exec('ROLLBACK');
+        }
         if ($e->getCode() === '23000') {
             $registerError = 'You are already registered for this event.';
         } else {
