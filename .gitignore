@@ -1,0 +1,7 @@
+.env
+*.log
+sql/event_registration.sqlite
+vendor/
+node_modules/
+.DS_Store
+Thumbs.db
