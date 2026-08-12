@@ -37,7 +37,7 @@ tr:nth-child(even) { background: #f9fafb; }
 </head>
 <body>
 <h1>Database Contents — <?= e(DB_NAME ?? 'event_registration') ?></h1>
-<p>Local documentation view only (<?= (getenv('DB_DRIVER') ?: 'mysql') ?> driver). Shows every row currently stored.</p>
+<p>Local documentation view only (<?= e(DB_DRIVER) ?> driver). Shows every row currently stored.</p>
 
 <h2>users <span class="count">(<?= count($users) ?> rows)</span></h2>
 <table>
@@ -56,11 +56,12 @@ tr:nth-child(even) { background: #f9fafb; }
 
 <h2>events <span class="count">(<?= count($events) ?> rows)</span></h2>
 <table>
-<tr><th>id</th><th>title</th><th>location</th><th>event_date</th><th>total_slots</th><th>created_by</th></tr>
+<tr><th>id</th><th>title</th><th>category</th><th>location</th><th>event_date</th><th>total_slots</th><th>created_by</th></tr>
 <?php foreach ($events as $ev): ?>
 <tr>
 <td><?= e($ev['id']) ?></td>
 <td><?= e($ev['title']) ?></td>
+<td><?= e($ev['category'] ?? '') ?></td>
 <td><?= e($ev['location']) ?></td>
 <td><?= e($ev['event_date']) ?></td>
 <td><?= e($ev['total_slots']) ?></td>
