@@ -17,7 +17,8 @@ send_security_headers();
     <nav>
         <a href="/index.php">Events</a>
         <?php if (is_admin()): ?>
-            <a href="/admin/index.php">Admin Dashboard</a>
+            <a href="/admin/index.php">Admin</a>
+            <a href="/admin/analytics.php">Analytics</a>
         <?php endif; ?>
         <?php if (is_logged_in()): ?>
             <span class="user-pill">Hi, <?= e($_SESSION['user_name'] ?? 'User') ?></span>
