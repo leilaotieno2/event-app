@@ -92,7 +92,7 @@ include __DIR__ . '/includes/header.php';
     <p>Already have an account? <a href="/login.php">Log in</a></p>
 </div>
 
-<script>
+<script nonce="<?= e(csp_nonce()) ?>">
 // CLIENT-SIDE VALIDATION (defense in depth - server always re-validates)
 document.getElementById('registerForm').addEventListener('submit', function (e) {
     var pw = document.getElementById('password').value;

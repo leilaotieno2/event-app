@@ -90,6 +90,22 @@ function redirect(string $path): void
 }
 
 /* ---------------------------------------------------------------
+ * CSP nonce for inline <script> blocks. script-src 'self' alone
+ * blocks ALL inline scripts (with or without 'unsafe-inline'
+ * omitted, that's blocked by design) - a nonce lets us keep inline
+ * scripts working without falling back to 'unsafe-inline', which
+ * would defeat the point of having a script-src restriction at all.
+ * ------------------------------------------------------------- */
+function csp_nonce(): string
+{
+    static $nonce = null;
+    if ($nonce === null) {
+        $nonce = base64_encode(random_bytes(16));
+    }
+    return $nonce;
+}
+
+/* ---------------------------------------------------------------
  * Basic security headers applied to every page.
  * ------------------------------------------------------------- */
 function send_security_headers(): void
@@ -97,6 +113,7 @@ function send_security_headers(): void
     header("X-Content-Type-Options: nosniff");
     header("X-Frame-Options: DENY");
     header("Referrer-Policy: strict-origin-when-cross-origin");
-    // A conservative CSP: only allow same-origin scripts/styles.
-    header("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'");
+    // A conservative CSP: only allow same-origin scripts + this request's
+    // nonce for inline scripts, and same-origin/inline styles.
+    header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-" . csp_nonce() . "'; style-src 'self' 'unsafe-inline'");
 }

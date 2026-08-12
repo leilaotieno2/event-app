@@ -31,12 +31,18 @@ if (!$event) {
     die('Event not found.');
 }
 
-$alreadyRegistered = false;
+$myRegistration = null;
+$onWaitlist = false;
 if (is_logged_in()) {
-    $stmt = $pdo->prepare('SELECT id FROM registrations WHERE user_id = ? AND event_id = ?');
+    $stmt = $pdo->prepare('SELECT id, checkin_code, checked_in_at FROM registrations WHERE user_id = ? AND event_id = ?');
     $stmt->execute([current_user_id(), $eventId]);
-    $alreadyRegistered = (bool)$stmt->fetch();
+    $myRegistration = $stmt->fetch() ?: null;
+
+    $stmt = $pdo->prepare('SELECT id FROM waitlist WHERE user_id = ? AND event_id = ?');
+    $stmt->execute([current_user_id(), $eventId]);
+    $onWaitlist = (bool)$stmt->fetch();
 }
+$alreadyRegistered = (bool)$myRegistration;
 
 $registerError = null;
 
@@ -44,7 +50,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
     require_login();
     verify_csrf();
 
-    // Re-validate the posted event id matches this page (defense in depth)
     $postedEventId = filter_input(INPUT_POST, 'event_id', FILTER_VALIDATE_INT);
     if ($postedEventId !== $eventId) {
         http_response_code(400);
@@ -70,12 +75,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
         }
 
         if ($locked['taken'] >= $locked['total_slots']) {
-            $registerError = 'Sorry, this event is now full.';
+            $registerError = 'Sorry, this event is now full. Join the waitlist below to be notified if a spot opens up.';
             $pdo->rollBack();
         } else {
-            // DUPLICATE REGISTRATION PREVENTION:
-            // 1) UNIQUE(user_id, event_id) constraint in the DB is the real guarantee.
-            // 2) We also pre-check here for a friendly error message.
             $dupStmt = $pdo->prepare(
                 'SELECT id FROM registrations WHERE user_id = ? AND event_id = ?'
             );
@@ -85,20 +87,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
                 $registerError = 'You are already registered for this event.';
                 $pdo->rollBack();
             } else {
+                $checkinCode = strtoupper(bin2hex(random_bytes(4)));
                 $insert = $pdo->prepare(
-                    'INSERT INTO registrations (user_id, event_id) VALUES (?, ?)'
+                    'INSERT INTO registrations (user_id, event_id, checkin_code) VALUES (?, ?, ?)'
                 );
-                $insert->execute([current_user_id(), $eventId]);
+                $insert->execute([current_user_id(), $eventId, $checkinCode]);
+                $pdo->prepare('DELETE FROM waitlist WHERE user_id = ? AND event_id = ?')
+                    ->execute([current_user_id(), $eventId]);
                 $pdo->commit();
 
-                set_flash('success', 'You are registered for "' . $event['title'] . '"!');
+                set_flash('success', 'You are registered for "' . $event['title'] . '"! Your check-in code is ' . $checkinCode . '.');
                 redirect('/event.php?id=' . $eventId);
             }
         }
     } catch (PDOException $e) {
         $pdo->rollBack();
-        // Error code 23000 = integrity constraint violation (our UNIQUE key).
-        // This is the final safety net if two requests race past the checks above.
         if ($e->getCode() === '23000') {
             $registerError = 'You are already registered for this event.';
         } else {
@@ -107,9 +110,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_event'])) {
         }
     }
 
-    // Refresh event data after the attempt
     $event = fetch_event($pdo, $eventId);
-    $alreadyRegistered = $alreadyRegistered || ($registerError === 'You are already registered for this event.');
+    $stmt = $pdo->prepare('SELECT id, checkin_code, checked_in_at FROM registrations WHERE user_id = ? AND event_id = ?');
+    $stmt->execute([current_user_id(), $eventId]);
+    $myRegistration = $stmt->fetch() ?: null;
+    $alreadyRegistered = (bool)$myRegistration || ($registerError === 'You are already registered for this event.');
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['join_waitlist'])) {
+    require_login();
+    verify_csrf();
+    try {
+        $stmt = $pdo->prepare('INSERT INTO waitlist (user_id, event_id) VALUES (?, ?)');
+        $stmt->execute([current_user_id(), $eventId]);
+        set_flash('success', "You're on the waitlist. We'll let you know if a spot opens up.");
+    } catch (PDOException $e) {
+        // Already on the waitlist (UNIQUE constraint) - not an error worth showing.
+    }
+    redirect('/event.php?id=' . $eventId);
 }
 
 $pageTitle = $event['title'];
@@ -117,6 +135,7 @@ include __DIR__ . '/includes/header.php';
 ?>
 
 <div class="card">
+    <span class="cat-tag"><?= e($event['category'] ?? 'General') ?></span>
     <h1><?= e($event['title']) ?></h1>
     <p><?= nl2br(e($event['description'])) ?></p>
     <p><strong>Date:</strong> <?= e(date('d M Y, H:i', strtotime($event['event_date']))) ?></p>
@@ -128,16 +147,33 @@ include __DIR__ . '/includes/header.php';
         </span>
     </p>
 
+    <a class="btn btn-ghost btn-sm" href="/api/calendar.php?event_id=<?= (int)$event['id'] ?>">📅 Add to calendar</a>
+
     <?php if ($registerError): ?>
         <div class="alert alert-error"><?= e($registerError) ?></div>
     <?php endif; ?>
 
     <?php if (!is_logged_in()): ?>
-        <p><a href="/login.php">Log in</a> to register for this event.</p>
-    <?php elseif ($alreadyRegistered): ?>
-        <div class="alert alert-success">You are already registered for this event.</div>
+        <p style="margin-top:16px;"><a href="/login.php">Log in</a> to register for this event.</p>
+    <?php elseif ($alreadyRegistered && $myRegistration): ?>
+        <div class="alert alert-success">
+            You're registered for this event.
+            <?php if ($myRegistration['checked_in_at']): ?>
+                Checked in at <?= e(date('d M Y, H:i', strtotime($myRegistration['checked_in_at']))) ?>.
+            <?php else: ?>
+                Show this code at check-in: <strong><?= e($myRegistration['checkin_code']) ?></strong>
+            <?php endif; ?>
+        </div>
     <?php elseif ((int)$event['slots_remaining'] <= 0): ?>
         <div class="alert alert-error">This event is full.</div>
+        <?php if ($onWaitlist): ?>
+            <div class="alert alert-success">You're on the waitlist - we'll notify you if a spot opens up.</div>
+        <?php else: ?>
+            <form method="post" action="/event.php?id=<?= (int)$event['id'] ?>">
+                <?= csrf_field() ?>
+                <button type="submit" name="join_waitlist" value="1" class="btn-secondary">Join Waitlist</button>
+            </form>
+        <?php endif; ?>
     <?php else: ?>
         <form method="post" action="/event.php?id=<?= (int)$event['id'] ?>">
             <?= csrf_field() ?>
@@ -149,7 +185,21 @@ include __DIR__ . '/includes/header.php';
     <p><a href="/index.php">&larr; Back to all events</a></p>
 </div>
 
-<script>
+<div class="ai-widget" id="aiWidget">
+    <button class="ai-widget-toggle" id="aiToggle">💬 Ask AI about this event</button>
+    <div class="ai-widget-panel" id="aiPanel">
+        <div class="ai-widget-head">Event Assistant</div>
+        <div class="ai-widget-body" id="aiBody">
+            <div class="ai-msg bot">Ask me about the date, location, availability, or anything else about this event.</div>
+        </div>
+        <form class="ai-widget-form" id="aiForm">
+            <input type="text" id="aiInput" placeholder="Type a question…" maxlength="300" autocomplete="off">
+            <button type="submit">Send</button>
+        </form>
+    </div>
+</div>
+
+<script nonce="<?= e(csp_nonce()) ?>">
 function refreshSlots() {
     var badge = document.getElementById('slots-<?= (int)$event['id'] ?>');
     if (!badge) return;
@@ -167,6 +217,51 @@ function refreshSlots() {
         .catch(function () {});
 }
 setInterval(refreshSlots, 5000);
+
+// AI assistant widget
+var aiToggle = document.getElementById('aiToggle');
+var aiPanel = document.getElementById('aiPanel');
+var aiBody = document.getElementById('aiBody');
+var aiForm = document.getElementById('aiForm');
+var aiInput = document.getElementById('aiInput');
+var csrfToken = '<?= e(csrf_token()) ?>';
+
+aiToggle.addEventListener('click', function () {
+    aiPanel.classList.toggle('open');
+});
+
+aiForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var question = aiInput.value.trim();
+    if (!question) return;
+
+    var userMsg = document.createElement('div');
+    userMsg.className = 'ai-msg user';
+    userMsg.textContent = question;
+    aiBody.appendChild(userMsg);
+    aiInput.value = '';
+    aiBody.scrollTop = aiBody.scrollHeight;
+
+    fetch('/api/ai_assistant.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event_id: <?= (int)$event['id'] ?>, question: question, csrf_token: csrfToken })
+    })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+            var botMsg = document.createElement('div');
+            botMsg.className = 'ai-msg bot';
+            botMsg.textContent = data.answer || data.error || 'Sorry, something went wrong.';
+            aiBody.appendChild(botMsg);
+            aiBody.scrollTop = aiBody.scrollHeight;
+        })
+        .catch(function () {
+            var botMsg = document.createElement('div');
+            botMsg.className = 'ai-msg bot';
+            botMsg.textContent = 'Sorry, I could not reach the assistant right now.';
+            aiBody.appendChild(botMsg);
+        });
+});
 </script>
 
 <?php include __DIR__ . '/includes/footer.php'; ?>

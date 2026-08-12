@@ -99,7 +99,7 @@ include __DIR__ . '/../includes/header.php';
     <p><a href="/admin/index.php">&larr; Back to dashboard</a></p>
 </div>
 
-<script>
+<script nonce="<?= e(csp_nonce()) ?>">
 document.getElementById('aiGenerateBtn').addEventListener('click', function () {
     var btn = this;
     var status = document.getElementById('aiStatus');
