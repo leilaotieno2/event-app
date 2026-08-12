@@ -20,7 +20,14 @@ define('DB_HOST', env('DB_HOST', 'localhost'));
 define('DB_NAME', env('DB_NAME', 'event_registration'));
 define('DB_USER', env('DB_USER', 'root'));
 define('DB_PASS', env('DB_PASS', ''));
-define('DB_SQLITE_PATH', env('DB_SQLITE_PATH', __DIR__ . '/../sql/event_registration.sqlite'));
+// Resolve relative to the project root, not getcwd() - PHP's built-in
+// dev server chdir()s into the requested script's own directory, which
+// would otherwise silently break this path for anything under /admin.
+$sqlitePath = env('DB_SQLITE_PATH', 'sql/event_registration.sqlite');
+if (!preg_match('#^([a-zA-Z]:[\\\\/]|/)#', $sqlitePath)) {
+    $sqlitePath = __DIR__ . '/../' . $sqlitePath;
+}
+define('DB_SQLITE_PATH', $sqlitePath);
 
 function get_db_connection(): PDO
 {
