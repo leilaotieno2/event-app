@@ -30,6 +30,7 @@ CREATE TABLE events (
     title           VARCHAR(150)        NOT NULL,
     description     TEXT,
     location        VARCHAR(150),
+    category        VARCHAR(50)         NOT NULL DEFAULT 'General',
     event_date      DATETIME            NOT NULL,
     total_slots     INT UNSIGNED        NOT NULL,
     created_by      INT,
@@ -42,14 +43,48 @@ CREATE TABLE events (
 -- Registrations table
 -- UNIQUE(user_id, event_id) is the database-level guarantee
 -- that stops a user registering twice for the same event, even
--- under concurrent requests.
+-- under concurrent requests. checkin_code is a short, unique
+-- token shown to the attendee and looked up by staff at the door.
 -- ------------------------------------------------------------
 CREATE TABLE registrations (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     user_id         INT NOT NULL,
     event_id        INT NOT NULL,
+    checkin_code    VARCHAR(20) NOT NULL,
+    checked_in_at   TIMESTAMP NULL DEFAULT NULL,
     registered_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uniq_user_event (user_id, event_id),
+    UNIQUE KEY uniq_checkin_code (checkin_code),
+    FOREIGN KEY (user_id)  REFERENCES users(id)  ON DELETE CASCADE,
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ------------------------------------------------------------
+-- Waitlist: joined once an event is full. First-come-first-served
+-- ordering comes from joined_at. UNIQUE stops duplicate entries.
+-- ------------------------------------------------------------
+CREATE TABLE waitlist (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    user_id         INT NOT NULL,
+    event_id        INT NOT NULL,
+    joined_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_waitlist_user_event (user_id, event_id),
+    FOREIGN KEY (user_id)  REFERENCES users(id)  ON DELETE CASCADE,
+    FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ------------------------------------------------------------
+-- Post-event feedback. Feeds the admin analytics dashboard and
+-- is summarised by the AI assistant.
+-- ------------------------------------------------------------
+CREATE TABLE event_feedback (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    user_id         INT NOT NULL,
+    event_id        INT NOT NULL,
+    rating          TINYINT UNSIGNED NOT NULL,
+    comment         TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uniq_feedback_user_event (user_id, event_id),
     FOREIGN KEY (user_id)  REFERENCES users(id)  ON DELETE CASCADE,
     FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
